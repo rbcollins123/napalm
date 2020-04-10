@@ -14,28 +14,22 @@
 
 """napalm.base package."""
 
-# Python3 support
-from __future__ import print_function
-from __future__ import unicode_literals
-
 # Python std lib
 import inspect
 import importlib
-
 
 # NAPALM base
 from napalm.base.base import NetworkDriver
 from napalm.base.exceptions import ModuleImportError
 from napalm.base.mock import MockDriver
-from napalm.base.utils import py23_compat
 
 __all__ = [
-    'get_network_driver',  # export the function
-    'NetworkDriver'  # also export the base class
+    "get_network_driver",  # export the function
+    "NetworkDriver",  # also export the base class
 ]
 
 
-def get_network_driver(module_name, prepend=True):
+def get_network_driver(name, prepend=True):
     """
     Searches for a class derived form the base NAPALM class NetworkDriver in a specific library.
     The library name must repect the following pattern: napalm_[DEVICE_OS].
@@ -48,7 +42,7 @@ def get_network_driver(module_name, prepend=True):
     .. _`Read the Docs`: \
     http://napalm.readthedocs.io/
 
-    :param module_name:         the name of the device operating system or the name of the library.
+    :param name:         the name of the device operating system or the name of the library.
     :return:                    the first class derived from NetworkDriver, found in the library.
     :raise ModuleImportError:   when the library is not installed or a derived class from \
     NetworkDriver was not found.
@@ -67,32 +61,42 @@ def get_network_driver(module_name, prepend=True):
         napalm.base.exceptions.ModuleImportError: Cannot import "napalm_wrong". Is the library \
         installed?
     """
-    if module_name == "mock":
+    if name == "mock":
         return MockDriver
 
-    if not (isinstance(module_name, py23_compat.string_types) and len(module_name) > 0):
-        raise ModuleImportError('Please provide a valid driver name.')
+    if not (isinstance(name, str) and len(name) > 0):
+        raise ModuleImportError("Please provide a valid driver name.")
 
     # Only lowercase allowed
-    module_name = module_name.lower()
+    name = name.lower()
     # Try to not raise error when users requests IOS-XR for e.g.
-    module_install_name = module_name.replace('-', '')
+    module_install_name = name.replace("-", "")
     community_install_name = "napalm_{name}".format(name=module_install_name)
     custom_install_name = "custom_napalm.{name}".format(name=module_install_name)
     # Can also request using napalm_[SOMETHING]
-    if 'napalm' not in module_install_name and prepend is True:
-        module_install_name = 'napalm.{name}'.format(name=module_install_name)
+    if "napalm" not in module_install_name and prepend is True:
+        module_install_name = "napalm.{name}".format(name=module_install_name)
     # Order is custom_napalm_os (local only) ->  napalm.os (core) ->  napalm_os (community)
-    for module_name in [custom_install_name, module_install_name, community_install_name]:
+    for module_name in [
+        custom_install_name,
+        module_install_name,
+        community_install_name,
+    ]:
         try:
             module = importlib.import_module(module_name)
             break
-        except ImportError:
-            pass
+        except ImportError as e:
+            message = str(e)
+            if "No module named" in message:
+                # py2 doesn't have ModuleNotFoundError exception
+                failed_module = message.split()[-1]
+                if failed_module.replace("'", "") in module_name:
+                    continue
+            raise e
     else:
         raise ModuleImportError(
             'Cannot import "{install_name}". Is the library installed?'.format(
-                install_name=module_install_name
+                install_name=name
             )
         )
 
@@ -102,5 +106,7 @@ def get_network_driver(module_name, prepend=True):
 
     # looks like you don't have any Driver class in your module...
     raise ModuleImportError(
-        'No class inheriting "napalm.base.base.NetworkDriver" found in "{install_name}".'
-        .format(install_name=module_install_name))
+        'No class inheriting "napalm.base.base.NetworkDriver" found in "{install_name}".'.format(
+            install_name=module_install_name
+        )
+    )

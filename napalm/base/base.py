@@ -12,17 +12,16 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# Python3 support
-from __future__ import print_function
-from __future__ import unicode_literals
+import sys
+
+from netmiko import ConnectHandler, NetMikoTimeoutException
 
 # local modules
 import napalm.base.exceptions
 import napalm.base.helpers
-
 from napalm.base import constants as c
-
 from napalm.base import validate
+from napalm.base.exceptions import ConnectionException
 
 
 class NetworkDriver(object):
@@ -43,17 +42,27 @@ class NetworkDriver(object):
         raise NotImplementedError
 
     def __enter__(self):
-        self.open()
-        return self
+        try:
+            self.open()
+            return self
+        except:  # noqa: E722
+            # Swallow exception if __exit__ returns a True value
+            if self.__exit__(*sys.exc_info()):
+                pass
+            else:
+                raise
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
         self.close()
         if exc_type is not None and (
-                            exc_type.__name__ not in dir(napalm.base.exceptions) and
-                            exc_type.__name__ not in __builtins__.keys()):
-            epilog = ("NAPALM didn't catch this exception. Please, fill a bugfix on "
-                      "https://github.com/napalm-automation/napalm/issues\n"
-                      "Don't forget to include this traceback.")
+            exc_type.__name__ not in dir(napalm.base.exceptions)
+            and exc_type.__name__ not in __builtins__.keys()
+        ):
+            epilog = (
+                "NAPALM didn't catch this exception. Please, fill a bugfix on "
+                "https://github.com/napalm-automation/napalm/issues\n"
+                "Don't forget to include this traceback."
+            )
             print(epilog)
             return False
 
@@ -68,6 +77,33 @@ class NetworkDriver(object):
                 self.close()
         except Exception:
             pass
+
+    def _netmiko_open(self, device_type, netmiko_optional_args=None):
+        """Standardized method of creating a Netmiko connection using napalm attributes."""
+        if netmiko_optional_args is None:
+            netmiko_optional_args = {}
+        try:
+            self._netmiko_device = ConnectHandler(
+                device_type=device_type,
+                host=self.hostname,
+                username=self.username,
+                password=self.password,
+                timeout=self.timeout,
+                **netmiko_optional_args
+            )
+        except NetMikoTimeoutException:
+            raise ConnectionException("Cannot connect to {}".format(self.hostname))
+
+        # ensure in enable mode
+        self._netmiko_device.enable()
+        return self._netmiko_device
+
+    def _netmiko_close(self):
+        """Standardized method of closing a Netmiko connection."""
+        if getattr(self, "_netmiko_device", None):
+            self._netmiko_device.disconnect()
+            self._netmiko_device = None
+        self.device = None
 
     def open(self):
         """
@@ -115,8 +151,9 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
-    def load_template(self, template_name, template_source=None,
-                      template_path=None, **template_vars):
+    def load_template(
+        self, template_name, template_source=None, template_path=None, **template_vars
+    ):
         """
         Will load a templated configuration on the device.
 
@@ -132,11 +169,13 @@ class NetworkDriver(object):
         source does not have the right format, either the arguments in `template_vars` are not \
         properly specified.
         """
-        return napalm.base.helpers.load_template(self,
-                                                 template_name,
-                                                 template_source=template_source,
-                                                 template_path=template_path,
-                                                 **template_vars)
+        return napalm.base.helpers.load_template(
+            self,
+            template_name,
+            template_source=template_source,
+            template_path=template_path,
+            **template_vars
+        )
 
     def load_replace_candidate(self, filename=None, config=None):
         """
@@ -178,7 +217,7 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
-    def commit_config(self):
+    def commit_config(self, message=""):
         """
         Commits the changes requested by the method load_replace_candidate or load_merge_candidate.
         """
@@ -229,11 +268,13 @@ class NetworkDriver(object):
         Returns a dictionary of dictionaries. The keys for the first dictionary will be the \
         interfaces in the devices. The inner dictionary will containing the following data for \
         each interface:
+
          * is_up (True/False)
          * is_enabled (True/False)
          * description (string)
-         * last_flapped (int in seconds)
+         * last_flapped (float in seconds)
          * speed (int in Mbit)
+         * MTU (in Bytes)
          * mac_address (string)
 
         Example::
@@ -244,8 +285,9 @@ class NetworkDriver(object):
                 'is_up': False,
                 'is_enabled': False,
                 'description': '',
-                'last_flapped': -1,
+                'last_flapped': -1.0,
                 'speed': 1000,
+                'mtu': 1500,
                 'mac_address': 'FA:16:3E:57:33:61',
                 },
             u'Ethernet1':
@@ -255,6 +297,7 @@ class NetworkDriver(object):
                 'description': 'foo',
                 'last_flapped': 1429978575.1554043,
                 'speed': 1000,
+                'mtu': 1500,
                 'mac_address': 'FA:16:3E:57:33:62',
                 },
             u'Ethernet2':
@@ -264,6 +307,7 @@ class NetworkDriver(object):
                 'description': 'bla',
                 'last_flapped': 1429978575.1555667,
                 'speed': 1000,
+                'mtu': 1500,
                 'mac_address': 'FA:16:3E:57:33:63',
                 },
             u'Ethernet3':
@@ -271,8 +315,9 @@ class NetworkDriver(object):
                 'is_up': False,
                 'is_enabled': True,
                 'description': 'bar',
-                'last_flapped': -1,
+                'last_flapped': -1.0,
                 'speed': 1000,
+                'mtu': 1500,
                 'mac_address': 'FA:16:3E:57:33:64',
                 }
             }
@@ -349,36 +394,36 @@ class NetworkDriver(object):
             Note, if is_up is False and uptime has a positive value then this indicates the
             uptime of the last active BGP session.
 
-            Example response:
-            {
-              "global": {
-                "router_id": "10.0.1.1",
-                "peers": {
-                  "10.0.0.2": {
-                    "local_as": 65000,
-                    "remote_as": 65000,
-                    "remote_id": "10.0.1.2",
-                    "is_up": True,
-                    "is_enabled": True,
-                    "description": "internal-2",
-                    "uptime": 4838400,
-                    "address_family": {
-                      "ipv4": {
-                        "sent_prefixes": 637213,
-                        "accepted_prefixes": 3142,
-                        "received_prefixes": 3142
-                      },
-                      "ipv6": {
-                        "sent_prefixes": 36714,
-                        "accepted_prefixes": 148,
-                        "received_prefixes": 148
+            Example::
+
+                {
+                  "global": {
+                    "router_id": "10.0.1.1",
+                    "peers": {
+                      "10.0.0.2": {
+                        "local_as": 65000,
+                        "remote_as": 65000,
+                        "remote_id": "10.0.1.2",
+                        "is_up": True,
+                        "is_enabled": True,
+                        "description": "internal-2",
+                        "uptime": 4838400,
+                        "address_family": {
+                          "ipv4": {
+                            "sent_prefixes": 637213,
+                            "accepted_prefixes": 3142,
+                            "received_prefixes": 3142
+                          },
+                          "ipv6": {
+                            "sent_prefixes": 36714,
+                            "accepted_prefixes": 148,
+                            "received_prefixes": 148
+                          }
+                        }
                       }
                     }
                   }
                 }
-              }
-            }
-
         """
         raise NotImplementedError
 
@@ -471,20 +516,31 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
-    def get_lldp_neighbors_detail(self, interface=''):
+    def get_lldp_neighbors_detail(self, interface=""):
         """
         Returns a detailed view of the LLDP neighbors as a dictionary
         containing lists of dictionaries for each interface.
 
+        Empty entries are returned as an empty string (e.g. '') or list where applicable.
+
         Inner dictionaries contain fields:
+
             * parent_interface (string)
             * remote_port (string)
             * remote_port_description (string)
             * remote_chassis_id (string)
             * remote_system_name (string)
             * remote_system_description (string)
-            * remote_system_capab (string)
-            * remote_system_enabled_capab (string)
+            * remote_system_capab (list) with any of these values
+                * other
+                * repeater
+                * bridge
+                * wlan-access-point
+                * router
+                * telephone
+                * docsis-cable-device
+                * station
+            * remote_system_enabled_capab (list)
 
         Example::
 
@@ -500,15 +556,15 @@ class NetworkDriver(object):
                               Software 7.1(0)N1(1a)
                               TAC support: http://www.cisco.com/tac
                               Copyright (c) 2002-2015, Cisco Systems, Inc. All rights reserved.''',
-                        'remote_system_capab': u'B, R',
-                        'remote_system_enable_capab': u'B'
+                        'remote_system_capab': ['bridge', 'repeater'],
+                        'remote_system_enable_capab': ['bridge']
                     }
                 ]
             }
         """
         raise NotImplementedError
 
-    def get_bgp_config(self, group='', neighbor=''):
+    def get_bgp_config(self, group="", neighbor=""):
         """
         Returns a dictionary containing the BGP configuration.
         Can return either the whole config, either the config only for a group or neighbor.
@@ -518,6 +574,7 @@ class NetworkDriver(object):
 
         Main dictionary keys represent the group name and the values represent a dictionary having
         the keys below. Neighbors which aren't members of a group will be stored in a key named "_":
+
             * type (string)
             * description (string)
             * apply_groups (string list)
@@ -531,7 +588,9 @@ class NetworkDriver(object):
             * remove_private_as (True/False)
             * prefix_limit (dictionary)
             * neighbors (dictionary)
+
         Neighbors is a dictionary of dictionaries with the following keys:
+
             * description (string)
             * import_policy (string)
             * export_policy (string)
@@ -542,6 +601,7 @@ class NetworkDriver(object):
             * prefix_limit (dictionary)
             * route_reflector_client (True/False)
             * nhs (True/False)
+
         The inner dictionary prefix_limit has the same structure for both layers::
 
             {
@@ -631,7 +691,7 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
-    def get_bgp_neighbors_detail(self, neighbor_address=''):
+    def get_bgp_neighbors_detail(self, neighbor_address=""):
 
         """
         Returns a detailed view of the BGP neighbors as a dictionary of lists.
@@ -726,7 +786,7 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
-    def get_arp_table(self):
+    def get_arp_table(self, vrf=""):
 
         """
         Returns a list of dictionaries having the following set of keys:
@@ -734,6 +794,12 @@ class NetworkDriver(object):
             * mac (string)
             * ip (string)
             * age (float)
+
+        'vrf' of null-string will default to all VRFs. Specific 'vrf' will return the ARP table
+        entries for that VRFs (including potentially 'default' or 'global').
+
+        In all cases the same data structure is returned and no reference to the VRF that was used
+        is included in the output.
 
         Example::
 
@@ -838,9 +904,10 @@ class NetworkDriver(object):
         Returns all configured IP addresses on all interfaces as a dictionary of dictionaries.
         Keys of the main dictionary represent the name of the interface.
         Values of the main dictionary represent are dictionaries that may consist of two keys
-        'ipv4' and 'ipv6' (one, both or none) which are themselvs dictionaries witht the IP
+        'ipv4' and 'ipv6' (one, both or none) which are themselves dictionaries with the IP
         addresses as keys.
         Each IP Address dictionary has the following keys:
+
             * prefix_length (int)
 
         Example::
@@ -890,6 +957,7 @@ class NetworkDriver(object):
         """
         Returns a lists of dictionaries. Each dictionary represents an entry in the MAC Address
         Table, having the following keys:
+
             * mac (string)
             * interface (string)
             * vlan (int)
@@ -935,7 +1003,7 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
-    def get_route_to(self, destination='', protocol=''):
+    def get_route_to(self, destination="", protocol="", longer=False):
 
         """
         Returns a dictionary of dictionaries containing details of all available routes to a
@@ -943,6 +1011,7 @@ class NetworkDriver(object):
 
         :param destination: The destination prefix to be used when filtering the routes.
         :param protocol (optional): Retrieve the routes only for a specific protocol.
+        :param longer (optional): Retrieve more specific routes as well.
 
         Each inner dictionary contains the following fields:
 
@@ -1059,6 +1128,7 @@ class NetworkDriver(object):
         The keys of the main dictionary represent the name of the probes.
         Each probe consists on multiple tests, each test name being a key in the probe dictionary.
         A test has the following keys:
+
             * probe_type (str)
             * target (str)
             * source (str)
@@ -1094,6 +1164,7 @@ class NetworkDriver(object):
         The keys of the main dictionary represent the name of the probes.
         Each probe consists on multiple tests, each test name being a key in the probe dictionary.
         A test has the following keys:
+
             * target (str)
             * source (str)
             * probe_type (str)
@@ -1156,8 +1227,16 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
-    def ping(self, destination, source=c.PING_SOURCE, ttl=c.PING_TTL, timeout=c.PING_TIMEOUT,
-             size=c.PING_SIZE, count=c.PING_COUNT, vrf=c.PING_VRF):
+    def ping(
+        self,
+        destination,
+        source=c.PING_SOURCE,
+        ttl=c.PING_TTL,
+        timeout=c.PING_TIMEOUT,
+        size=c.PING_SIZE,
+        count=c.PING_COUNT,
+        vrf=c.PING_VRF,
+    ):
         """
         Executes ping on the device and returns a dictionary with the result
 
@@ -1220,12 +1299,14 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
-    def traceroute(self,
-                   destination,
-                   source=c.TRACEROUTE_SOURCE,
-                   ttl=c.TRACEROUTE_TTL,
-                   timeout=c.TRACEROUTE_TIMEOUT,
-                   vrf=c.TRACEROUTE_VRF):
+    def traceroute(
+        self,
+        destination,
+        source=c.TRACEROUTE_SOURCE,
+        ttl=c.TRACEROUTE_TTL,
+        timeout=c.TRACEROUTE_TIMEOUT,
+        vrf=c.TRACEROUTE_VRF,
+    ):
         """
         Executes traceroute on the device and returns a dictionary with the result.
 
@@ -1241,6 +1322,7 @@ class NetworkDriver(object):
 
         In case of success, the keys of the dictionary represent the hop ID, while values are
         dictionaries containing the probes results:
+
             * rtt (float)
             * ip_address (str)
             * host_name (str)
@@ -1336,6 +1418,7 @@ class NetworkDriver(object):
         Returns a dictionary with the configured users.
         The keys of the main dictionary represents the username. The values represent the details
         of the user, represented by the following keys:
+
             * level (int)
             * password (str)
             * sshkeys (list)
@@ -1390,52 +1473,54 @@ class NetworkDriver(object):
                                 * min (float)
                                 * max (float)
 
-        Example:
+        Example::
 
             {
-                    'et1': {
-                        'physical_channels': {
-                            'channel': [
-                                {
-                                    'index': 0,
-                                    'state': {
-                                        'input_power': {
-                                            'instant': 0.0,
-                                            'avg': 0.0,
-                                            'min': 0.0,
-                                            'max': 0.0,
-                                        },
-                                        'output_power': {
-                                            'instant': 0.0,
-                                            'avg': 0.0,
-                                            'min': 0.0,
-                                            'max': 0.0,
-                                        },
-                                        'laser_bias_current': {
-                                            'instant': 0.0,
-                                            'avg': 0.0,
-                                            'min': 0.0,
-                                            'max': 0.0,
-                                        },
-                                    }
+                'et1': {
+                    'physical_channels': {
+                        'channel': [
+                            {
+                                'index': 0,
+                                'state': {
+                                    'input_power': {
+                                        'instant': 0.0,
+                                        'avg': 0.0,
+                                        'min': 0.0,
+                                        'max': 0.0,
+                                    },
+                                    'output_power': {
+                                        'instant': 0.0,
+                                        'avg': 0.0,
+                                        'min': 0.0,
+                                        'max': 0.0,
+                                    },
+                                    'laser_bias_current': {
+                                        'instant': 0.0,
+                                        'avg': 0.0,
+                                        'min': 0.0,
+                                        'max': 0.0,
+                                    },
                                 }
-                            ]
-                        }
+                            }
+                        ]
                     }
                 }
+            }
         """
         raise NotImplementedError
 
-    def get_config(self, retrieve='all'):
+    def get_config(self, retrieve="all", full=False):
         """
         Return the configuration of a device.
 
         Args:
             retrieve(string): Which configuration type you want to populate, default is all of them.
-                The rest will be set to "".
+                              The rest will be set to "".
+            full(bool): Retrieve all the configuration. For instance, on ios, "sh run all".
 
         Returns:
-          The object returned is a dictionary with the following keys:
+          The object returned is a dictionary with a key for each configuration store:
+
             - running(string) - Representation of the native running configuration
             - candidate(string) - Representation of the native candidate configuration. If the
               device doesnt differentiate between running and startup configuration this will an
@@ -1446,7 +1531,7 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
-    def get_network_instances(self, name=''):
+    def get_network_instances(self, name=""):
         """
         Return a dictionary of network instances (VRFs) configured, including default/global
 
@@ -1456,44 +1541,45 @@ class NetworkDriver(object):
         Returns:
             A dictionary of network instances in OC format:
             * name (dict)
-              * name (unicode)
-              * type (unicode)
-              * state (dict)
-                * route_distinguisher (unicode)
-              * interfaces (dict)
-                * interface (dict)
-                  * interface name: (dict)
+                * name (unicode)
+                * type (unicode)
+                * state (dict)
+                    * route_distinguisher (unicode)
+                * interfaces (dict)
+                    * interface (dict)
+                        * interface name: (dict)
 
-        Example:
-        {
-            u'MGMT': {
-                u'name': u'MGMT',
-                u'type': u'L3VRF',
-                u'state': {
-                    u'route_distinguisher': u'123:456',
+        Example::
+
+            {
+                u'MGMT': {
+                    u'name': u'MGMT',
+                    u'type': u'L3VRF',
+                    u'state': {
+                        u'route_distinguisher': u'123:456',
+                    },
+                    u'interfaces': {
+                        u'interface': {
+                            u'Management1': {}
+                        }
+                    }
                 },
-                u'interfaces': {
-                    u'interface': {
-                        u'Management1': {}
+                u'default': {
+                    u'name': u'default',
+                    u'type': u'DEFAULT_INSTANCE',
+                    u'state': {
+                        u'route_distinguisher': None,
+                    },
+                    u'interfaces: {
+                        u'interface': {
+                            u'Ethernet1': {}
+                            u'Ethernet2': {}
+                            u'Ethernet3': {}
+                            u'Ethernet4': {}
+                        }
                     }
                 }
             }
-            u'default': {
-                u'name': u'default',
-                u'type': u'DEFAULT_INSTANCE',
-                u'state': {
-                    u'route_distinguisher': None,
-                },
-                u'interfaces: {
-                    u'interface': {
-                        u'Ethernet1': {}
-                        u'Ethernet2': {}
-                        u'Ethernet3': {}
-                        u'Ethernet4': {}
-                    }
-                }
-            }
-        }
         """
         raise NotImplementedError
 
@@ -1518,23 +1604,23 @@ class NetworkDriver(object):
 
         Example::
 
-        {
-            'policy_name': [{
-                'position': 1,
-                'packet_hits': 200,
-                'byte_hits': 83883,
-                'id': '230',
-                'enabled': True,
-                'schedule': 'Always',
-                'log': 'all',
-                'l3_src': 'any',
-                'l3_dst': 'any',
-                'service': 'HTTP',
-                'src_zone': 'port2',
-                'dst_zone': 'port3',
-                'action': 'Permit'
-            }]
-        }
+            {
+                'policy_name': [{
+                    'position': 1,
+                    'packet_hits': 200,
+                    'byte_hits': 83883,
+                    'id': '230',
+                    'enabled': True,
+                    'schedule': 'Always',
+                    'log': 'all',
+                    'l3_src': 'any',
+                    'l3_dst': 'any',
+                    'service': 'HTTP',
+                    'src_zone': 'port2',
+                    'dst_zone': 'port3',
+                    'action': 'Permit'
+                }]
+            }
         """
         raise NotImplementedError
 
@@ -1543,6 +1629,7 @@ class NetworkDriver(object):
         Get IPv6 neighbors table information.
 
         Return a list of dictionaries having the following set of keys:
+
             * interface (string)
             * mac (string)
             * ip (string)
@@ -1550,6 +1637,7 @@ class NetworkDriver(object):
             * state (string)
 
         For example::
+
             [
                 {
                     'interface' : 'MgmtEth0/RSP0/CPU0/0',
@@ -1569,6 +1657,28 @@ class NetworkDriver(object):
         """
         raise NotImplementedError
 
+    def get_vlans(self):
+        """
+        Return structure being spit balled is as follows.
+            * vlan_id (int)
+                * name (text_type)
+                * interfaces (list)
+
+        Example::
+
+            {
+                1: {
+                    "name": "default",
+                    "interfaces": ["GigabitEthernet0/0/1", "GigabitEthernet0/0/2"]
+                },
+                2: {
+                    "name": "vlan2",
+                    "interfaces": []
+                }
+            }
+        """
+        raise NotImplementedError
+
     def compliance_report(self, validation_file=None, validation_source=None):
         """
         Return a compliance report.
@@ -1581,12 +1691,15 @@ class NetworkDriver(object):
         :raise ValidationException: File is not valid.
         :raise NotImplementedError: Method not implemented.
         """
-        return validate.compliance_report(self, validation_file=validation_file,
-                                          validation_source=validation_source)
+        return validate.compliance_report(
+            self, validation_file=validation_file, validation_source=validation_source
+        )
 
     def _canonical_int(self, interface):
         """Expose the helper function within this class."""
         if self.use_canonical_interface is True:
-            return napalm.base.helpers.canonical_interface_name(interface, addl_name_map=None)
+            return napalm.base.helpers.canonical_interface_name(
+                interface, addl_name_map=None
+            )
         else:
             return interface

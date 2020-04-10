@@ -55,6 +55,10 @@ docs/_static/
 
 .idea
 .DS_Store
+.vagrant
+.venv
+.vscode
+.devcontainer
 
 env
 *.swp
@@ -63,6 +67,7 @@ test/unit/test_devices.py
 
 report.json
 tags
+.pytest_cache/
 
 docs/integrations/ansible/modules/napalm_*/
 docs/integrations/ansible/modules/source/*.json

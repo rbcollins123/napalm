@@ -93,17 +93,17 @@ Cisco IOS is very particular about the self-signed certificate and will reject r
 Banner
 ______
 
-IOS requires that the banner use the EXT character (ASCII 3). This looks like a cntl-C in the file, but as a single character. It is NOT a separate '^' + 'C' character, but an ASCII3 character::
+IOS requires that the banner use the ETX character (ASCII 3). This looks like a cntl-C in the file, but as a single character. It is NOT a separate '^' + 'C' character, but an ASCII3 character::
 
     banner motd ^C
         my banner test
     ^C
 
-    >>> ext_char = chr(3)
+    >>> etx_char = chr(3)
     >>> with open("my_config.conf", "a") as f:
-    ...   f.write("banner motd {}\n".format(ext_char))
+    ...   f.write("banner motd {}\n".format(etx_char))
     ...   f.write("my banner test\n")
-    ...   f.write("{}\n".format(ext_char))
+    ...   f.write("{}\n".format(etx_char))
     ...
     >>> quit()
 
@@ -113,7 +113,7 @@ In vim insert, you can also type <ctrl>+V, release only the V, then type C
 
 
 File Operation Prompts
-_____
+______________________
 
 By default IOS will prompt for confirmation on file operations. These prompts need to be disabled before the NAPALM-ios driver performs any such operation on the device.
 This can be controlled using the `auto_file_prompt` optional arguement:
@@ -126,7 +126,7 @@ This can be controlled using the `auto_file_prompt` optional arguement:
   otherwise a `CommandErrorException` will be raised when file operations are attempted.
 
 SCP File Transfers
-_____
+__________________
 
 The NAPALM-ios driver requires SCP to be enabled on the managed device. SCP
 server functionality is disabled in IOS by default, and is configured using
