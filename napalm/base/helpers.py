@@ -5,6 +5,7 @@ import re
 import sys
 import itertools
 import logging
+from collections import Iterable
 
 # third party libs
 import jinja2
@@ -46,7 +47,7 @@ def load_template(
     template_path=None,
     openconfig=False,
     jinja_filters={},
-    **template_vars
+    **template_vars,
 ):
     try:
         search_path = []
@@ -460,3 +461,44 @@ def transform_lldp_capab(capabilities):
         )
     else:
         return []
+
+
+def generate_regex_or(filters):
+    """
+    Build a regular expression logical-or from a list/tuple of regex patterns.
+
+    This allows a single regular expression operation to be used in contexts when a loop
+    and multiple patterns would otherwise be necessary.
+
+    For example, (pattern1|pattern2|pattern3)
+
+    Return the pattern.
+    """
+    if isinstance(filters, str) or not isinstance(filters, Iterable):
+        raise ValueError("filters argument must be an iterable, but can't be a string.")
+
+    return_pattern = r"("
+    for pattern in filters:
+        return_pattern += rf"{pattern}|"
+    return_pattern += r")"
+    return return_pattern
+
+
+def sanitize_config(config, filters):
+    """
+    Given a list of filters, remove sensitive data from the provided config.
+    """
+    for filter_, replace in filters.items():
+        config = re.sub(filter_, replace, config, flags=re.M)
+    return config
+
+
+def sanitize_configs(configs, filters):
+    """
+    Apply sanitize_config on the dictionary of configs typically returned by
+    the get_config method.
+    """
+    for cfg_name, config in configs.items():
+        if config.strip():
+            configs[cfg_name] = sanitize_config(config, filters)
+    return configs
